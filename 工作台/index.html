@@ -9,6 +9,7 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%231a3c77'/%3E%3Cpath d='M14 19h36v8H14zm0 18h23v8H14z' fill='white'/%3E%3Ccircle cx='47' cy='41' r='7' fill='%23f3bd52'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <script src="local-data.js" defer></script>
+  <script src="krm-countdown.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -44,6 +45,15 @@
         <p id="data-status" role="status" aria-live="polite">事项仅保存在当前浏览器。导出备份可防止换设备或清理浏览器后丢失。</p>
         <label class="completed-toggle"><input id="show-completed" type="checkbox"> 显示已完成</label>
       </div>
+
+      <section class="krm-risk" aria-labelledby="krm-risk-heading">
+        <div class="krm-risk-top">
+          <div><p class="eyebrow">KRM FOLLOW-UP CLOCK</p><h2 id="krm-risk-heading">线索流转倒计时</h2></div>
+          <p>按你填写或导入的日期估算。未建联、谈判中连续 14 天无跟进记录可能退回公海；已签约连续 28 天无跟进记录可能进入待分配池。实际阶段和归属以 KRM 为准。</p>
+        </div>
+        <div class="krm-risk-stats"><span>纳入倒计时 <strong id="krm-risk-total">0</strong></span><span>3 天内或已临界 <strong id="krm-risk-urgent">0</strong></span><span>待补／核对日期 <strong id="krm-risk-missing">0</strong></span></div>
+        <div id="krm-risk-list" class="krm-risk-list"></div>
+      </section>
 
       <section class="daily" aria-labelledby="daily-heading">
         <div class="daily-heading">
@@ -114,8 +124,13 @@
         <label class="field">放在哪个区块 <select id="task-category" name="category" required><option value="today">今日待办事项</option><option value="progress">跟进中</option><option value="focus">重点事项</option><option value="future">未来工作事项</option></select></label>
         <label class="field">事项类型 <select id="task-type" name="type"><option value="邮件待回复">邮件待回复</option><option value="政策待审批">政策待审批</option><option value="样机与内容">样机与内容</option><option value="KOL 核实">KOL 核实</option><option value="KOL 触达">KOL 触达</option><option value="KOL 跟进">KOL 跟进</option><option value="其他">其他</option></select></label>
         <label class="field">KOL 清单归类 <select id="task-flow" name="flow"><option value="">仅显示在工作事项</option><option value="uncontacted">尚未触达</option><option value="no_reply">已触达未回复</option><option value="reply_pending">已回复待跟进</option><option value="collaboration">合作推进</option><option value="collaboration_review">合作状态待核实</option><option value="script">样机在手、脚本待修改</option><option value="verify">候选待核实</option></select></label>
+        <label class="field">KRM 阶段 <select id="task-krm-stage" name="krmStage"><option value="">未记录／待核实</option><option value="unconnected">未建联 · 14 天</option><option value="negotiating">谈判中 · 14 天</option><option value="signed">已签约 · 28 天</option><option value="allocation">待分配池 · 暂勿联系</option><option value="public">公海 · 待确认归属</option></select></label>
         <label class="field">优先级 <select id="task-priority" name="priority"><option value="high">高</option><option value="medium" selected>中</option><option value="low">低</option></select></label>
         <label class="field">截止 / 下次跟进日期 <input id="task-due" name="due" type="date"></label>
+        <label class="field">最近触达／沟通日期 <input id="task-last-activity" name="lastActivityDate" type="date"></label>
+        <label class="field">认领日期（未建联备用） <input id="task-claimed-date" name="claimedDate" type="date"></label>
+        <label class="field">进入谈判／签约日期（备用） <input id="task-stage-date" name="stageDate" type="date"></label>
+        <p class="field-help">倒计时优先使用最近触达／沟通日期；未填写时使用认领或进入阶段日期。请核对该次跟进已录入 KRM。</p>
         <label class="field full">相关 KOL / 对象 <input id="task-person" name="person" type="text" maxlength="100" placeholder="可留空"></label>
         <label class="field full">下一步动作 <textarea id="task-next" name="next" rows="2" maxlength="400" placeholder="写清楚下一步具体要做什么"></textarea></label>
         <label class="field full">对方需要 / 待确认 <textarea id="task-need" name="need" rows="2" maxlength="300" placeholder="例如：等我确认合作方式；没有记录就留空"></textarea></label>

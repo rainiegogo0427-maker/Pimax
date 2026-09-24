@@ -4,8 +4,9 @@
   const STORAGE_KEY = "pimax-kol-workbench-v1";
   const CATEGORIES = ["today", "progress", "focus", "future"];
   const PRIORITIES = { high: 0, medium: 1, low: 2 };
-  const SOURCE_LABELS = { manual: "手动", main: "KOL 主表", followup: "跟进记录", candidate: "候选名单", workbook: "跟进表单" };
+  const SOURCE_LABELS = { manual: "手动", main: "KOL 主表", followup: "跟进记录", candidate: "候选名单", workbook: "跟进表单", krm: "KRM 摘要" };
   const FLOW_LABELS = { uncontacted: "尚未触达", no_reply: "已触达未回复", reply_pending: "已回复待核对跟进", collaboration: "合作推进", collaboration_review: "合作状态待核实", script: "样机与脚本", verify: "候选待核实" };
+  const KRM_STAGE_LABELS = { unconnected: "未建联", negotiating: "谈判中", signed: "已签约", allocation: "待分配池", public: "公海" };
   const $ = (id) => document.getElementById(id);
   let today = localDate(new Date());
   let state = loadState();
@@ -23,7 +24,7 @@
 
   function validDate(value) {
     const date = clean(value, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
+    return window.KrmCountdown.isValidDate(date) ? date : "";
   }
 
   function normalizeTask(value) {
@@ -43,6 +44,10 @@
       flow: Object.hasOwn(FLOW_LABELS, value.flow) ? value.flow : "",
       evidence: clean(value.evidence, 300),
       need: clean(value.need, 300),
+      krmStage: Object.hasOwn(KRM_STAGE_LABELS, value.krmStage) ? value.krmStage : "",
+      claimedDate: validDate(value.claimedDate),
+      stageDate: validDate(value.stageDate),
+      lastActivityDate: validDate(value.lastActivityDate),
       suggested: value.suggested === true,
       done: value.done === true,
       edited: value.edited === true
@@ -109,6 +114,9 @@
     meta.append(el("span", "", task.type));
     if (task.person) meta.append(el("span", "", task.person));
     if (task.due) meta.append(el("span", task.due < today && !task.done ? "overdue" : "", dateLabel(task.due)));
+    const risk = window.KrmCountdown.calculate(task, today);
+    if (risk) meta.append(riskBadge(risk));
+    else if (["allocation", "public"].includes(task.krmStage)) meta.append(el("span", "overdue", `${KRM_STAGE_LABELS[task.krmStage]} · 先核对归属`));
     meta.append(el("span", "", SOURCE_LABELS[task.source]));
     main.append(meta);
     if (task.need) main.append(el("p", "task-next", `对方需要 / 待确认：${task.need}`));
@@ -145,7 +153,7 @@
 
   function render() {
     const showCompleted = $("show-completed").checked;
-    const activeFollowups = new Set(state.tasks.filter((task) => ["followup", "workbook"].includes(task.source) && !task.done).map((task) => accountKey(task.person)));
+    const activeFollowups = new Set(state.tasks.filter((task) => ["followup", "workbook", "krm"].includes(task.source) && !task.done).map((task) => accountKey(task.person)));
     for (const category of CATEGORIES) {
       const list = $(`list-${category}`);
       list.replaceChildren();
@@ -158,6 +166,51 @@
       }
     }
     renderDailyLists();
+    renderKrmCountdown();
+  }
+
+  function riskBadge(info) {
+    let label, level;
+    if (info.status === "missing") { label = `${info.target}倒计时 · 待补日期`; level = "missing"; }
+    else if (info.status === "invalid") { label = "日期晚于今天 · 请核对"; level = "missing"; }
+    else if (info.remainingDays < 0) { label = `已超 ${-info.remainingDays} 天 · 核对 KRM`; level = "urgent"; }
+    else if (info.remainingDays === 0) { label = `${info.target}今日临界`; level = "urgent"; }
+    else { label = `距${info.target}还剩 ${info.remainingDays} 天`; level = info.remainingDays <= 3 ? "urgent" : info.remainingDays <= 7 ? "soon" : "normal"; }
+    return el("span", `risk-chip risk-${level}`, label);
+  }
+
+  function renderKrmCountdown() {
+    const entries = state.tasks.filter((task) => !task.done).map((task) => ({ task, info: window.KrmCountdown.calculate(task, today) })).filter((item) => item.info);
+    const known = entries.filter((item) => item.info.status === "ready");
+    const urgent = known.filter((item) => item.info.remainingDays <= 3);
+    const missing = entries.length - known.length;
+    $("krm-risk-total").textContent = String(entries.length);
+    $("krm-risk-urgent").textContent = String(urgent.length);
+    $("krm-risk-missing").textContent = String(missing);
+    const list = $("krm-risk-list");
+    list.replaceChildren();
+    if (!entries.length) {
+      list.append(el("p", "daily-empty", "还没有可计算的 KRM 阶段记录。编辑事项，填写 KRM 阶段与日期后会显示倒计时。"));
+      return;
+    }
+    entries.sort((a, b) => (a.info.status === "ready" ? 0 : 1) - (b.info.status === "ready" ? 0 : 1) || (a.info.remainingDays ?? 9999) - (b.info.remainingDays ?? 9999) || a.task.title.localeCompare(b.task.title, "zh-CN"));
+    for (const { task, info } of entries) {
+      const card = el("article", "krm-risk-item");
+      const heading = el("div", "krm-risk-item-head");
+      heading.append(el("strong", "", task.person || task.title));
+      heading.append(riskBadge(info));
+      card.append(heading);
+      let detail = `${info.stage} · ${info.days} 天无跟进记录 → ${info.target}`;
+      if (info.status === "ready") detail += ` · ${info.basis} ${info.baseDate} · 临界日 ${info.deadline}`;
+      else if (info.status === "invalid") detail += ` · ${info.basis} ${info.baseDate} 晚于今天`;
+      else detail += " · 缺少认领/阶段日期或最后触达沟通日期";
+      card.append(el("p", "krm-risk-detail", detail));
+      const edit = el("button", "text-button", info.status === "ready" ? "更新日期" : "补录日期");
+      edit.type = "button";
+      edit.addEventListener("click", () => openDialog(task));
+      card.append(edit);
+      list.append(card);
+    }
   }
 
   function compactCard(task) {
@@ -167,6 +220,8 @@
     head.append(el("span", "daily-item-source", SOURCE_LABELS[task.source]));
     card.append(head);
     if (task.evidence) card.append(el("p", "daily-item-evidence", task.evidence));
+    const risk = window.KrmCountdown.calculate(task, today);
+    if (risk) card.append(riskBadge(risk));
     if (task.need) card.append(el("p", "daily-item-need", `对方需要 / 待确认：${task.need}`));
     card.append(el("p", "daily-item-next", task.next || task.title));
     const edit = el("button", "text-button", "编辑下一步");
@@ -177,8 +232,8 @@
   }
 
   function renderDailyLists() {
-    const active = state.tasks.filter((task) => !task.done);
-    const contacted = new Set(active.filter((task) => ["workbook", "followup"].includes(task.source)).map((task) => accountKey(task.person)));
+    const active = state.tasks.filter((task) => !task.done && !["allocation", "public"].includes(task.krmStage));
+    const contacted = new Set(active.filter((task) => ["workbook", "followup", "krm"].includes(task.source) && task.flow !== "uncontacted").map((task) => accountKey(task.person)));
     const groups = {
       uncontacted: active.filter((task) => task.flow === "uncontacted" && !contacted.has(accountKey(task.person))),
       no_reply: active.filter((task) => task.flow === "no_reply"),
@@ -205,12 +260,15 @@
     }
     const diagnostics = window.PIMAX_LOCAL_SEED?.diagnostics;
     if (diagnostics && state.imports.privateSeedRevision) {
-      $("source-summary").textContent = `已整理 ${diagnostics.workbook_rows} 条触达记录；${diagnostics.outside_europe_or_unknown} 条地区不在欧洲或未知、${diagnostics.do_not_contact} 条明确拒绝均未进入待办。${diagnostics.candidate_duplicates} 条候选与已触达记录重合，已排除重复。原表无统一下次跟进日期。`;
+      const krmSummary = diagnostics.krm_rows ? `KRM 复制文本 ${diagnostics.krm_rows} 条，识别欧洲尚未触达 ${diagnostics.krm_europe} 条；${diagnostics.krm_outside_or_unknown} 条非欧洲或地区不明、${diagnostics.krm_unsupported_stage} 条阶段无法归类，未进入待办。` : "";
+      $("source-summary").textContent = `${krmSummary}跟进表单 ${diagnostics.workbook_rows} 条；${diagnostics.outside_europe_or_unknown} 条地区不在欧洲或未知、${diagnostics.do_not_contact} 条明确拒绝未进入待办。倒计时只依据可核实的跟进或认领日期。`;
     }
   }
 
   function displayCategory(task) {
-    return task.due && task.due <= today && task.category !== "focus" ? "today" : task.category;
+    if (["allocation", "public"].includes(task.krmStage)) return "future";
+    const risk = window.KrmCountdown.calculate(task, today);
+    return task.category !== "focus" && ((task.due && task.due <= today) || (risk?.status === "ready" && risk.remainingDays <= 3)) ? "today" : task.category;
   }
 
   function openDialog(task) {
@@ -226,6 +284,10 @@
       $("task-person").value = task.person;
       $("task-next").value = task.next;
       $("task-flow").value = task.flow;
+      $("task-krm-stage").value = task.krmStage;
+      $("task-last-activity").value = task.lastActivityDate;
+      $("task-claimed-date").value = task.claimedDate;
+      $("task-stage-date").value = task.stageDate;
       $("task-need").value = task.need;
       $("task-evidence").value = task.evidence;
     }
@@ -247,6 +309,10 @@
       person: $("task-person").value,
       next: $("task-next").value,
       flow: $("task-flow").value,
+      krmStage: $("task-krm-stage").value,
+      lastActivityDate: $("task-last-activity").value,
+      claimedDate: $("task-claimed-date").value,
+      stageDate: $("task-stage-date").value,
       need: $("task-need").value,
       evidence: $("task-evidence").value,
       suggested: existing ? existing.suggested : false,
@@ -323,13 +389,17 @@
       } else if (source === "followup") {
         const status = clean(row["当前状态"]);
         if (["已拒绝-勿再联系", "已放弃", "内容已发"].includes(status)) continue;
-        if (!["已首触", "跟进中", "洽谈中", "已成交", "已发货", "已暂缓"].includes(status)) continue;
+        if (!["未建联", "已首触", "跟进中", "谈判中", "洽谈中", "已签约", "已成交", "已发货", "已暂缓"].includes(status)) continue;
         const due = validDate(row["下次跟进日期"]);
         if (status === "已暂缓" && !due) continue;
         const category = due && due <= today ? "today" : status === "已暂缓" ? "future" : "progress";
         const title = status === "已发货" ? `确认 ${account} 样机签收与内容进度` : `跟进 ${account}`;
         const next = clean(row["卡点/等待什么"]) || (status === "已发货" ? "确认是否签收样机，并约定内容进度。" : "查看上次沟通内容，按约定时间跟进。");
         task = importedTask(`followup:${account.toLowerCase()}`, title, category, status === "已发货" ? "样机与内容" : "KOL 跟进", due && due <= today ? "high" : "medium", due, account, next, source);
+        task.krmStage = { "未建联": "unconnected", "谈判中": "negotiating", "已签约": "signed" }[status] || "";
+        task.lastActivityDate = validDate(row["最后联系日期"]) || validDate(row["首触日期"]);
+        task.claimedDate = validDate(row["认领日期"]);
+        task.stageDate = validDate(row["进入谈判日期"]) || validDate(row["签约日期"]);
       } else if (source === "candidate") {
         if (row["公海查重结果"] !== "未发现重复" || row["状态"] !== "待核实") continue;
         task = importedTask(`candidate:${account.toLowerCase()}`, `核实候选 ${account}`, "future", "KOL 核实", "low", "", account, "先核实主页、近期内容、国家和语言；通过后才进入正式主表和触达队列。", source);
@@ -359,7 +429,7 @@
         const old = previous.get(fresh.id);
         if (old) {
           fresh.done = old.done;
-          if (old.edited) Object.assign(fresh, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, flow: old.flow, evidence: old.evidence, need: old.need, suggested: old.suggested, edited: true });
+          if (old.edited) Object.assign(fresh, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, flow: old.flow, evidence: old.evidence, need: old.need, krmStage: old.krmStage, lastActivityDate: old.lastActivityDate, claimedDate: old.claimedDate, stageDate: old.stageDate, suggested: old.suggested, edited: true });
         }
         state.tasks.push(fresh);
       }
@@ -401,12 +471,12 @@
     if (!seed || seed.version !== 1 || !Array.isArray(seed.tasks) || !seed.revision || state.imports.privateSeedRevision === seed.revision) return;
     const previous = new Map(state.tasks.map((task) => [task.id, task]));
     const fresh = seed.tasks.map(normalizeTask).filter(Boolean);
-    state.tasks = state.tasks.filter((task) => task.source !== "workbook" && task.source !== "candidate");
+    state.tasks = state.tasks.filter((task) => !["workbook", "candidate", "krm"].includes(task.source));
     for (const task of fresh) {
       const old = previous.get(task.id);
       if (old) {
         task.done = old.done;
-        if (old.edited) Object.assign(task, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, flow: old.flow, evidence: old.evidence, need: old.need, suggested: old.suggested, edited: true });
+        if (old.edited) Object.assign(task, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, flow: old.flow, evidence: old.evidence, need: old.need, krmStage: old.krmStage, lastActivityDate: old.lastActivityDate, claimedDate: old.claimedDate, stageDate: old.stageDate, suggested: old.suggested, edited: true });
       }
       state.tasks.push(task);
     }

@@ -1,6 +1,6 @@
 """从用户提供的跟进表生成仅供本机工作台使用的脱敏数据。
 
-用法（由助理执行）：python3 prepare_private_data.py 跟进表.xlsx 候选名单.csv
+用法（由助理执行）：python3 prepare_private_data.py 跟进表.xlsx 候选名单.csv [KRM粘贴文本.txt]
 只读取源文件；仅提取公开账号、地区和业务阶段。输出 local-data.js，
 绝不包含联系方式、邮件原文、私人地址或其他表格列。
 """
@@ -64,7 +64,7 @@ def workbook_sheets(archive):
         yield sheet.attrib["name"], target if target.startswith("xl/") else f"xl/{target}", strings
 
 
-def make_task(task_id, title, category, task_type, person, next_step, flow, evidence, need="", suggested=False):
+def make_task(task_id, title, category, task_type, person, next_step, flow, evidence, need="", suggested=False, krm_stage=""):
     return {
         "id": task_id,
         "title": title,
@@ -74,15 +74,62 @@ def make_task(task_id, title, category, task_type, person, next_step, flow, evid
         "due": "",
         "person": person,
         "next": next_step,
-        "source": "workbook" if task_id.startswith("workbook:") else "candidate",
+        "source": task_id.split(":", 1)[0],
         "flow": flow,
         "evidence": evidence,
         "need": need,
         "suggested": suggested,
+        "krmStage": krm_stage,
     }
 
 
-def build(workbook_path, candidates_path):
+def krm_paste_rows(path):
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    required = {"序号", "KOL名称", "沟通进度", "上一次沟通时间", "国家/地区", "跟进人", "创建时间", "操作"}
+    if not required.issubset(lines[:80]):
+        raise ValueError("KRM 粘贴文本缺少必要表头")
+    start = lines.index("操作") + 1
+    anchors = [i for i in range(start, len(lines) - 2) if lines[i].isdigit() and lines[i + 2] == "KOL"]
+    if not anchors or [int(lines[i]) for i in anchors] != list(range(1, len(anchors) + 1)):
+        raise ValueError("KRM 粘贴文本行号不连续，无法可靠拆分")
+    for index, anchor in enumerate(anchors):
+        values = lines[anchor + 1:anchors[index + 1] if index + 1 < len(anchors) else len(lines)]
+        if len(values) < 16 or not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", values[-1]):
+            raise ValueError(f"KRM 第 {index + 1} 行结构不完整")
+        yield values
+
+
+def krm_tasks(path, existing_names):
+    tasks = []
+    counts = {"krm_rows": 0, "krm_europe": 0, "krm_outside_or_unknown": 0,
+              "krm_duplicates": 0, "krm_unsupported_stage": 0}
+    for row in krm_paste_rows(path):
+        counts["krm_rows"] += 1
+        name = text(row[0])
+        link_index = next((i for i, value in enumerate(row) if value.startswith("https://")), None)
+        if not name or link_index is None or row[5] != "未建联" or row[4] != "1.1尚未触达":
+            counts["krm_unsupported_stage"] += 1
+            continue
+        countries = [value for value in row[link_index + 1:-3] if value in EUROPE]
+        if len(countries) != 1:
+            counts["krm_outside_or_unknown"] += 1
+            continue
+        counts["krm_europe"] += 1
+        key = identity(name)
+        if key in existing_names:
+            counts["krm_duplicates"] += 1
+            continue
+        existing_names.add(key)
+        country = countries[0]
+        tasks.append(make_task(
+            f"krm:{key}", f"触达 {name}", "future", "KOL 触达", name,
+            "先核实主页和当前线索归属，再按内容语言准备首触；补录 KRM 认领日期后显示流转倒计时。",
+            "uncontacted", f"KRM 复制文本 · {country} · 尚未触达 · 未建联",
+            krm_stage="unconnected"))
+    return tasks, counts
+
+
+def build(workbook_path, candidates_path, krm_paste_path=None):
     tasks = []
     counts = {"workbook_rows": 0, "outside_europe_or_unknown": 0, "do_not_contact": 0, "candidate_duplicates": 0}
     contacted = set()
@@ -108,7 +155,8 @@ def build(workbook_path, candidates_path):
                     task_id = f"workbook:{identity(person)}"
                     if stage == "未建联" and reply == "未回复" and touch in {"首次触达", "二次触达"}:
                         tasks.append(make_task(task_id, f"跟进 {person} 的未回复触达", "progress", "KOL 跟进", person,
-                            "核对最近一次发送时间，记录下次跟进日期；尚无日期，暂不当作今天到期。", "no_reply", evidence))
+                            "核对最近一次发送时间，记录下次跟进日期；尚无日期，暂不当作今天到期。", "no_reply", evidence,
+                            krm_stage="unconnected"))
                     elif stage == "触达推进中" and reply and reply != "未回复":
                         need = summary or "台账未记录对方具体需求"
                         unrecorded = not text(row.get("L"))
@@ -129,6 +177,10 @@ def build(workbook_path, candidates_path):
                         tasks.append(make_task(f"workbook:partner:{identity(person)}", f"确认 {person} 的合作需求", "progress",
                             "KOL 跟进", person, "核对当前合作需求和下一步时间。", "collaboration",
                             f"{country} · 签约状态：{signed} · 阶段：{stage}", "台账未记录"))
+    if krm_paste_path:
+        imported, krm_counts = krm_tasks(krm_paste_path, contacted)
+        tasks.extend(imported)
+        counts.update(krm_counts)
     if candidates_path and candidates_path.exists():
         with candidates_path.open("r", encoding="utf-8-sig", newline="") as stream:
             for row in csv.DictReader(stream):
@@ -146,11 +198,14 @@ def build(workbook_path, candidates_path):
 
 
 def main():
-    if len(sys.argv) not in {2, 3}:
-        raise SystemExit("用法：python3 prepare_private_data.py 跟进表.xlsx [候选名单.csv]")
+    if len(sys.argv) not in {2, 3, 4}:
+        raise SystemExit("用法：python3 prepare_private_data.py 跟进表.xlsx [候选名单.csv] [KRM粘贴文本.txt]")
     workbook = Path(sys.argv[1])
     candidates = Path(sys.argv[2]) if len(sys.argv) == 3 else None
-    data = build(workbook, candidates)
+    if len(sys.argv) == 4:
+        candidates = Path(sys.argv[2])
+    krm_paste = Path(sys.argv[3]) if len(sys.argv) == 4 else None
+    data = build(workbook, candidates, krm_paste)
     output = Path(__file__).with_name("local-data.js")
     output.write_text("window.PIMAX_LOCAL_SEED = " + json.dumps(data, ensure_ascii=True, separators=(",", ":")) + ";\n", encoding="utf-8")
     print(json.dumps({"output": str(output), "tasks": len(data["tasks"]), "diagnostics": data["diagnostics"]}, ensure_ascii=False))
