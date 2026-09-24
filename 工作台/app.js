@@ -3,6 +3,7 @@
 
   const STORAGE_KEY = "pimax-kol-workbench-v1";
   const CATEGORIES = ["today", "progress", "focus", "future"];
+  const VIEWS = ["home", "today", "followups", "leads", "clock", "done", "all"];
   const PRIORITIES = { high: 0, medium: 1, low: 2 };
   const SOURCE_LABELS = { manual: "手动", main: "KOL 主表", followup: "跟进记录", candidate: "候选名单", workbook: "跟进表单", krm: "KRM 摘要" };
   const FLOW_LABELS = { uncontacted: "尚未触达", no_reply: "已触达未回复", reply_pending: "已回复待核对跟进", collaboration: "合作推进", collaboration_review: "合作状态待核实", script: "样机与脚本", verify: "候选待核实" };
@@ -10,6 +11,9 @@
   const $ = (id) => document.getElementById(id);
   let today = localDate(new Date());
   let state = loadState();
+  let clockFilter = "all";
+  let lastEditedClockTaskId = "";
+  let shownView = "";
 
   function localDate(date) {
     const year = date.getFullYear();
@@ -167,6 +171,9 @@
     }
     renderDailyLists();
     renderKrmCountdown();
+    renderDashboard();
+    renderDone();
+    renderView();
   }
 
   function riskBadge(info) {
@@ -187,15 +194,21 @@
     $("krm-risk-total").textContent = String(entries.length);
     $("krm-risk-urgent").textContent = String(urgent.length);
     $("krm-risk-missing").textContent = String(missing);
+    for (const button of document.querySelectorAll("[data-clock-filter]")) button.setAttribute("aria-pressed", String(button.dataset.clockFilter === clockFilter));
+    const hints = { all: "显示全部纳入倒计时的人员；点击上方数字可筛选。", urgent: "显示剩余 3 天内、今天临界或已超过临界日的人员。", missing: "显示需要补录或核对日期的人员；点击姓名旁的按钮可直接补录。" };
+    $("krm-filter-hint").textContent = hints[clockFilter];
     const list = $("krm-risk-list");
     list.replaceChildren();
-    if (!entries.length) {
-      list.append(el("p", "daily-empty", "还没有可计算的 KRM 阶段记录。编辑事项，填写 KRM 阶段与日期后会显示倒计时。"));
+    const visible = entries.filter(({ info }) => clockFilter === "all" || (clockFilter === "urgent" ? info.status === "ready" && info.remainingDays <= 3 : info.status !== "ready"));
+    if (!visible.length) {
+      list.append(el("p", "daily-empty", clockFilter === "all" ? "还没有纳入倒计时的 KRM 阶段记录。" : "这个筛选下暂无人员。"));
       return;
     }
-    entries.sort((a, b) => (a.info.status === "ready" ? 0 : 1) - (b.info.status === "ready" ? 0 : 1) || (a.info.remainingDays ?? 9999) - (b.info.remainingDays ?? 9999) || a.task.title.localeCompare(b.task.title, "zh-CN"));
-    for (const { task, info } of entries) {
+    visible.sort((a, b) => (a.info.status === "ready" ? 0 : 1) - (b.info.status === "ready" ? 0 : 1) || (a.info.remainingDays ?? 9999) - (b.info.remainingDays ?? 9999) || a.task.title.localeCompare(b.task.title, "zh-CN"));
+    for (const { task, info } of visible) {
       const card = el("article", "krm-risk-item");
+      card.dataset.riskTaskId = task.id;
+      if (task.id === lastEditedClockTaskId) card.classList.add("is-recently-edited");
       const heading = el("div", "krm-risk-item-head");
       heading.append(el("strong", "", task.person || task.title));
       heading.append(riskBadge(info));
@@ -205,12 +218,78 @@
       else if (info.status === "invalid") detail += ` · ${info.basis} ${info.baseDate} 晚于今天`;
       else detail += " · 缺少认领/阶段日期或最后触达沟通日期";
       card.append(el("p", "krm-risk-detail", detail));
-      const edit = el("button", "text-button", info.status === "ready" ? "更新日期" : "补录日期");
+      const edit = el("button", "text-button", info.status === "ready" ? "更新倒计时日期" : "补日期并计算天数");
       edit.type = "button";
-      edit.addEventListener("click", () => openDialog(task));
+      edit.addEventListener("click", () => openDateDialog(task));
       card.append(edit);
       list.append(card);
     }
+  }
+
+  function activeTasks() {
+    return state.tasks.filter((task) => !task.done && !["allocation", "public"].includes(task.krmStage));
+  }
+
+  function renderDashboard() {
+    const active = activeTasks();
+    const todayTasks = active.filter((task) => displayCategory(task) === "today" || task.suggested);
+    const followups = active.filter((task) => ["no_reply", "reply_pending", "collaboration", "collaboration_review", "script"].includes(task.flow));
+    const leads = active.filter((task) => task.flow === "uncontacted");
+    const missing = state.tasks.filter((task) => !task.done && ["missing", "invalid"].includes(window.KrmCountdown.calculate(task, today)?.status));
+    $("stat-today").textContent = String(todayTasks.length);
+    $("stat-followups").textContent = String(followups.length);
+    $("stat-leads").textContent = String(leads.length);
+    $("stat-clock-missing").textContent = String(missing.length);
+    const done = state.tasks.filter((task) => task.done).length;
+    const total = state.tasks.length;
+    const percent = total ? Math.round(done / total * 100) : 0;
+    $("progress-done").textContent = String(done);
+    $("progress-total").textContent = String(total);
+    $("progress-percent").textContent = `${percent}%`;
+    $("progress-ring").style.setProperty("--progress", `${percent}%`);
+    $("progress-ring").setAttribute("aria-label", `事项处理进度 ${percent}%，${done} 项已处理，共 ${total} 项`);
+    const preview = $("home-priority-list");
+    preview.replaceChildren();
+    if (!todayTasks.length) preview.append(el("p", "daily-empty", "今天没有记录的到期事项。可查看待跟进或待触达名单。"));
+    else for (const task of todayTasks.sort(sortTasks).slice(0, 4)) preview.append(compactCard(task));
+    $("home-source-summary").textContent = $("source-summary").textContent;
+  }
+
+  function renderDone() {
+    const list = $("done-list");
+    list.replaceChildren();
+    const tasks = state.tasks.filter((task) => task.done).sort(sortTasks);
+    if (!tasks.length) list.append(el("p", "daily-empty", "还没有勾选完成的事项。处理后可在事项卡片中勾选完成。"));
+    else for (const task of tasks) list.append(createTaskCard(task));
+  }
+
+  function currentView() {
+    const value = window.location.hash.slice(1);
+    return VIEWS.includes(value) ? value : "home";
+  }
+
+  function goToView(view) {
+    if (!VIEWS.includes(view)) return;
+    if (window.location.hash !== `#${view}`) window.location.hash = view;
+    renderView();
+  }
+
+  function renderView() {
+    const view = currentView();
+    $("view-home").hidden = view !== "home";
+    $("view-clock").hidden = view !== "clock";
+    $("view-daily").hidden = !["today", "followups", "leads"].includes(view);
+    $("view-done").hidden = view !== "done";
+    $("view-all").hidden = view !== "all";
+    for (const panel of document.querySelectorAll("[data-daily-page]")) panel.hidden = panel.dataset.dailyPage !== view;
+    for (const link of document.querySelectorAll("[data-view-link]")) {
+      if (link.dataset.viewLink === view) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }
+    const headings = { today: "今日待办", followups: "待跟进", leads: "待触达" };
+    if (headings[view]) $("daily-heading").textContent = headings[view];
+    if (view !== shownView) window.scrollTo(0, 0);
+    shownView = view;
   }
 
   function compactCard(task) {
@@ -228,18 +307,25 @@
     edit.type = "button";
     edit.addEventListener("click", () => openDialog(task));
     card.append(edit);
+    if (task.person && !task.done) {
+      const date = el("button", "text-button", "设置倒计时日期");
+      date.type = "button";
+      date.addEventListener("click", () => openDateDialog(task));
+      card.append(date);
+    }
     return card;
   }
 
   function renderDailyLists() {
-    const active = state.tasks.filter((task) => !task.done && !["allocation", "public"].includes(task.krmStage));
+    const active = activeTasks();
     const contacted = new Set(active.filter((task) => ["workbook", "followup", "krm"].includes(task.source) && task.flow !== "uncontacted").map((task) => accountKey(task.person)));
     const groups = {
       uncontacted: active.filter((task) => task.flow === "uncontacted" && !contacted.has(accountKey(task.person))),
       no_reply: active.filter((task) => task.flow === "no_reply"),
       reply_pending: active.filter((task) => task.flow === "reply_pending"),
-      collaboration: active.filter((task) => ["collaboration", "collaboration_review", "reply_pending"].includes(task.flow)),
+      collaboration: active.filter((task) => ["collaboration", "collaboration_review"].includes(task.flow)),
       script: active.filter((task) => task.flow === "script"),
+      verify: active.filter((task) => task.flow === "verify"),
       today: active.filter((task) => displayCategory(task) === "today" || task.suggested)
     };
     const candidates = active.filter((task) => task.flow === "verify").length;
@@ -249,6 +335,7 @@
       reply_pending: "台账未记录已回复、但缺少后续跟进记录的 KOL。",
       collaboration: "台账未记录明确的谈判或合作需求。",
       script: "台账未记录欧洲 KOL 已持有样机且需要修改脚本。",
+      verify: "暂无等待核实的候选人。",
       today: "没有记录今天到期的事项；需要先补充下次跟进日期。"
     };
     for (const [key, tasks] of Object.entries(groups)) {
@@ -275,6 +362,7 @@
     $("task-form").reset();
     $("task-id").value = task ? task.id : "";
     $("dialog-title").textContent = task ? "编辑事项" : "添加事项";
+    $("task-save-button").textContent = task ? "保存修改" : "添加事项";
     if (task) {
       $("task-title").value = task.title;
       $("task-category").value = task.category;
@@ -293,6 +381,69 @@
     }
     $("task-dialog").showModal();
     $("task-title").focus();
+  }
+
+  function openDateDialog(task) {
+    $("date-form").reset();
+    $("date-task-id").value = task.id;
+    $("date-dialog-person").textContent = task.person || task.title;
+    $("date-krm-stage").value = ["unconnected", "negotiating", "signed"].includes(task.krmStage) ? task.krmStage : "";
+    $("date-value").max = today;
+    updateDateBasis();
+    $("date-dialog").showModal();
+    $("date-krm-stage").focus();
+  }
+
+  function updateDateBasis() {
+    const stage = $("date-krm-stage").value;
+    const basis = $("date-basis");
+    const claimed = basis.querySelector('[value="claimedDate"]');
+    const entered = basis.querySelector('[value="stageDate"]');
+    claimed.hidden = stage !== "unconnected";
+    claimed.disabled = stage !== "unconnected";
+    entered.hidden = stage === "unconnected";
+    entered.disabled = stage === "unconnected";
+    if (!basis.value || basis.selectedOptions[0].disabled) basis.value = stage === "unconnected" ? "claimedDate" : "stageDate";
+    const task = state.tasks.find((item) => item.id === $("date-task-id").value);
+    $("date-value").value = task?.[basis.value] || "";
+    updateDatePreview();
+  }
+
+  function updateDatePreview() {
+    const task = state.tasks.find((item) => item.id === $("date-task-id").value);
+    const stage = $("date-krm-stage").value;
+    const basis = $("date-basis").value;
+    const date = $("date-value").value;
+    const preview = $("date-preview");
+    if (!task || !stage || !date) { preview.textContent = "选好 KRM 阶段和日期后，这里会显示剩余天数。"; return; }
+    const result = window.KrmCountdown.calculate({ ...task, krmStage: stage, [basis]: date }, today);
+    if (!result || result.status !== "ready") { preview.textContent = "日期尚无法计算，请核对所填日期。"; return; }
+    preview.textContent = result.remainingDays < 0 ? `按现有日期估算：已超过${result.target}临界日 ${-result.remainingDays} 天；请先核对 KRM 当前状态。` : result.remainingDays === 0 ? `按现有日期估算：今天是进入${result.target}的临界日。` : `按现有日期估算：距${result.target}还剩 ${result.remainingDays} 天（临界日 ${result.deadline}）。`;
+  }
+
+  function saveDateForm(event) {
+    event.preventDefault();
+    const task = state.tasks.find((item) => item.id === $("date-task-id").value);
+    const stage = $("date-krm-stage").value;
+    const basis = $("date-basis").value;
+    const date = $("date-value").value;
+    if (!task || !["unconnected", "negotiating", "signed"].includes(stage) || !["claimedDate", "lastActivityDate", "stageDate"].includes(basis) || !validDate(date) || date > today) {
+      setStatus("请选择 KRM 阶段，并填写不晚于今天的有效日期。", true);
+      return;
+    }
+    task.krmStage = stage;
+    task[basis] = date;
+    task.edited = true;
+    lastEditedClockTaskId = task.id;
+    $("date-dialog").close();
+    clockFilter = "all";
+    persist("日期已保存；倒计时已按工作台记录重新计算，请以 KRM 实际阶段为准。");
+    render();
+    goToView("clock");
+    window.requestAnimationFrame(() => {
+      const card = [...document.querySelectorAll("[data-risk-task-id]")].find((item) => item.dataset.riskTaskId === task.id);
+      card?.scrollIntoView({ block: "center" });
+    });
   }
 
   function saveForm(event) {
@@ -489,6 +640,26 @@
   $("close-dialog").addEventListener("click", () => $("task-dialog").close());
   $("cancel-button").addEventListener("click", () => $("task-dialog").close());
   $("task-form").addEventListener("submit", saveForm);
+  $("close-date-dialog").addEventListener("click", () => $("date-dialog").close());
+  $("cancel-date-button").addEventListener("click", () => $("date-dialog").close());
+  $("date-form").addEventListener("submit", saveDateForm);
+  $("date-krm-stage").addEventListener("change", updateDateBasis);
+  $("date-basis").addEventListener("change", () => {
+    const task = state.tasks.find((item) => item.id === $("date-task-id").value);
+    $("date-value").value = task?.[$("date-basis").value] || "";
+    updateDatePreview();
+  });
+  $("date-value").addEventListener("input", updateDatePreview);
+  for (const button of document.querySelectorAll("[data-clock-filter]")) button.addEventListener("click", () => {
+    clockFilter = button.dataset.clockFilter;
+    renderKrmCountdown();
+  });
+  for (const button of document.querySelectorAll("[data-go-view]")) button.addEventListener("click", () => {
+    if (button.dataset.goClockFilter) clockFilter = button.dataset.goClockFilter;
+    if (button.dataset.goView === "clock") renderKrmCountdown();
+    goToView(button.dataset.goView);
+  });
+  window.addEventListener("hashchange", renderView);
   $("show-completed").addEventListener("change", render);
   $("csv-button").addEventListener("click", () => $("csv-input").click());
   $("csv-input").addEventListener("change", async (event) => { await importCSVs([...event.target.files]); event.target.value = ""; });

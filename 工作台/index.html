@@ -28,6 +28,16 @@
       </div>
     </header>
 
+    <nav class="view-nav" aria-label="工作台页面">
+      <a href="#home" data-view-link="home">总览</a>
+      <a href="#today" data-view-link="today">今日待办</a>
+      <a href="#followups" data-view-link="followups">待跟进</a>
+      <a href="#leads" data-view-link="leads">待触达</a>
+      <a href="#clock" data-view-link="clock">流转倒计时</a>
+      <a href="#done" data-view-link="done">已处理</a>
+      <a href="#all" data-view-link="all">全部事项</a>
+    </nav>
+
     <main>
       <section class="intro" aria-label="工作台操作">
         <div>
@@ -46,31 +56,50 @@
         <label class="completed-toggle"><input id="show-completed" type="checkbox"> 显示已完成</label>
       </div>
 
-      <section class="krm-risk" aria-labelledby="krm-risk-heading">
+      <section id="view-home" class="view dashboard" aria-labelledby="home-heading">
+        <div class="page-heading"><div><p class="eyebrow">OVERVIEW</p><h2 id="home-heading">今天的工作概览</h2></div><p>数字来自本机工作台记录，点击卡片查看对应名单。</p></div>
+        <div class="dashboard-stats">
+          <button type="button" class="stat-card" data-go-view="today"><span>今日待办</span><strong id="stat-today">0</strong><small>打开今日清单 →</small></button>
+          <button type="button" class="stat-card" data-go-view="followups"><span>待跟进</span><strong id="stat-followups">0</strong><small>查看未回复与合作推进 →</small></button>
+          <button type="button" class="stat-card" data-go-view="leads"><span>尚未触达</span><strong id="stat-leads">0</strong><small>查看可行动的线索 →</small></button>
+          <button type="button" class="stat-card" data-go-view="clock" data-go-clock-filter="missing"><span>倒计时待补日期</span><strong id="stat-clock-missing">0</strong><small>打开人员名单 →</small></button>
+        </div>
+        <div class="dashboard-grid">
+          <article class="dashboard-panel progress-panel"><div><p class="eyebrow">WORK ITEMS</p><h3>事项处理进度</h3><p>按工作台里勾选“完成”的事项计算；不代表 KRM 已更新跟进记录。</p></div><div class="progress-ring" id="progress-ring" role="img" aria-label="事项处理进度"><span id="progress-percent">0%</span></div><p class="progress-caption"><strong id="progress-done">0</strong> 项已处理 · <strong id="progress-total">0</strong> 项合计</p></article>
+          <article class="dashboard-panel"><div class="panel-heading"><div><p class="eyebrow">NEXT ACTIONS</p><h3>优先处理</h3></div><button type="button" class="text-button" data-go-view="today">查看全部 →</button></div><div id="home-priority-list" class="preview-list"></div></article>
+        </div>
+        <p id="home-source-summary" class="home-source-summary">载入本机数据后显示来源概况。</p>
+      </section>
+
+      <section id="view-clock" class="view krm-risk" aria-labelledby="krm-risk-heading" hidden>
         <div class="krm-risk-top">
           <div><p class="eyebrow">KRM FOLLOW-UP CLOCK</p><h2 id="krm-risk-heading">线索流转倒计时</h2></div>
           <p>按你填写或导入的日期估算。未建联、谈判中连续 14 天无跟进记录可能退回公海；已签约连续 28 天无跟进记录可能进入待分配池。实际阶段和归属以 KRM 为准。</p>
         </div>
-        <div class="krm-risk-stats"><span>纳入倒计时 <strong id="krm-risk-total">0</strong></span><span>3 天内或已临界 <strong id="krm-risk-urgent">0</strong></span><span>待补／核对日期 <strong id="krm-risk-missing">0</strong></span></div>
+        <div class="krm-risk-stats" role="group" aria-label="筛选倒计时名单"><button type="button" class="krm-filter" data-clock-filter="all" aria-pressed="true">全部人员 <strong id="krm-risk-total">0</strong></button><button type="button" class="krm-filter" data-clock-filter="urgent" aria-pressed="false">3 天内或已临界 <strong id="krm-risk-urgent">0</strong></button><button type="button" class="krm-filter" data-clock-filter="missing" aria-pressed="false">待补／核对日期 <strong id="krm-risk-missing">0</strong></button></div>
+        <p id="krm-filter-hint" class="filter-hint">显示全部纳入倒计时的人员；点击上方数字可筛选。</p>
         <div id="krm-risk-list" class="krm-risk-list"></div>
       </section>
 
-      <section class="daily" aria-labelledby="daily-heading">
+      <section id="view-daily" class="view daily" aria-labelledby="daily-heading" hidden>
         <div class="daily-heading">
           <div><p class="eyebrow">DAILY KOL DESK</p><h2 id="daily-heading">每日 KOL 清单</h2></div>
           <p id="source-summary">导入台账后，这里会按实际记录显示 KOL 的下一步。</p>
         </div>
         <div class="daily-grid">
-          <section class="daily-panel daily-panel-today" aria-labelledby="daily-title-today"><div class="daily-panel-head"><h3 id="daily-title-today">今天建议先处理谁</h3><span id="daily-count-today">0</span></div><p class="daily-panel-hint">含今天到期事项和根据未记录后续跟进给出的建议；建议不等于约定截止日。</p><div id="daily-today" class="daily-list"></div></section>
-          <section class="daily-panel" aria-labelledby="daily-title-reply_pending"><div class="daily-panel-head"><h3 id="daily-title-reply_pending">已回复但未记录后续跟进</h3><span id="daily-count-reply_pending">0</span></div><p class="daily-panel-hint">先核对邮件线程，再确认是否需要回复。</p><div id="daily-reply_pending" class="daily-list"></div></section>
-          <section class="daily-panel" aria-labelledby="daily-title-uncontacted"><div class="daily-panel-head"><h3 id="daily-title-uncontacted">尚未触达</h3><span id="daily-count-uncontacted">0</span></div><p class="daily-panel-hint">只显示已核实且确定未发送首触的 KOL。</p><div id="daily-uncontacted" class="daily-list"></div></section>
-          <section class="daily-panel" aria-labelledby="daily-title-no_reply"><div class="daily-panel-head"><h3 id="daily-title-no_reply">已触达、未回复</h3><span id="daily-count-no_reply">0</span></div><p class="daily-panel-hint">没有发送日期时，先补日期，不自动判定超期。</p><div id="daily-no_reply" class="daily-list"></div></section>
-          <section class="daily-panel" aria-labelledby="daily-title-collaboration"><div class="daily-panel-head"><h3 id="daily-title-collaboration">合作推进与对方需求</h3><span id="daily-count-collaboration">0</span></div><p class="daily-panel-hint">显示台账中的推进状态；谈判和签约以明确记录为准。</p><div id="daily-collaboration" class="daily-list"></div></section>
-          <section class="daily-panel" aria-labelledby="daily-title-script"><div class="daily-panel-head"><h3 id="daily-title-script">样机在手、脚本待修改</h3><span id="daily-count-script">0</span></div><p class="daily-panel-hint">需要同时有样机签收和脚本修改任务的记录。</p><div id="daily-script" class="daily-list"></div></section>
+          <section class="daily-panel daily-panel-today" data-daily-page="today" aria-labelledby="daily-title-today"><div class="daily-panel-head"><h3 id="daily-title-today">今天要处理</h3><span id="daily-count-today">0</span></div><p class="daily-panel-hint">含今天到期事项和根据未记录后续跟进给出的建议；建议不等于约定截止日。</p><div id="daily-today" class="daily-list"></div></section>
+          <section class="daily-panel" data-daily-page="followups" aria-labelledby="daily-title-reply_pending"><div class="daily-panel-head"><h3 id="daily-title-reply_pending">已回复但未记录后续跟进</h3><span id="daily-count-reply_pending">0</span></div><p class="daily-panel-hint">先核对邮件线程，再确认是否需要回复。</p><div id="daily-reply_pending" class="daily-list"></div></section>
+          <section class="daily-panel" data-daily-page="leads" aria-labelledby="daily-title-uncontacted"><div class="daily-panel-head"><h3 id="daily-title-uncontacted">尚未触达</h3><span id="daily-count-uncontacted">0</span></div><p class="daily-panel-hint">只显示已核实且确定未发送首触的 KOL。</p><div id="daily-uncontacted" class="daily-list"></div></section>
+          <section class="daily-panel" data-daily-page="followups" aria-labelledby="daily-title-no_reply"><div class="daily-panel-head"><h3 id="daily-title-no_reply">已触达、未回复</h3><span id="daily-count-no_reply">0</span></div><p class="daily-panel-hint">没有发送日期时，先补日期，不自动判定超期。</p><div id="daily-no_reply" class="daily-list"></div></section>
+          <section class="daily-panel" data-daily-page="followups" aria-labelledby="daily-title-collaboration"><div class="daily-panel-head"><h3 id="daily-title-collaboration">合作推进与对方需求</h3><span id="daily-count-collaboration">0</span></div><p class="daily-panel-hint">显示台账中的推进状态；谈判和签约以明确记录为准。</p><div id="daily-collaboration" class="daily-list"></div></section>
+          <section class="daily-panel" data-daily-page="followups" aria-labelledby="daily-title-script"><div class="daily-panel-head"><h3 id="daily-title-script">样机在手、脚本待修改</h3><span id="daily-count-script">0</span></div><p class="daily-panel-hint">需要同时有样机签收和脚本修改任务的记录。</p><div id="daily-script" class="daily-list"></div></section>
+          <section class="daily-panel" data-daily-page="leads" aria-labelledby="daily-title-verify"><div class="daily-panel-head"><h3 id="daily-title-verify">候选待核实</h3><span id="daily-count-verify">0</span></div><p class="daily-panel-hint">先核实主页、国家和语言；尚未进入可触达队列。</p><div id="daily-verify" class="daily-list"></div></section>
         </div>
       </section>
 
-      <section class="board" aria-label="工作事项四个区块">
+      <section id="view-done" class="view" aria-labelledby="done-heading" hidden><div class="page-heading"><div><p class="eyebrow">HISTORY</p><h2 id="done-heading">已处理事项</h2></div><p>这里显示你在工作台勾选完成的事项；是否已在 KRM 留下跟进记录，仍需按公司系统核对。</p></div><div id="done-list" class="done-list"></div></section>
+
+      <section id="view-all" class="view" aria-label="工作事项四个区块" hidden><div class="page-heading"><div><p class="eyebrow">ALL WORK</p><h2>全部事项</h2></div><p>沿用原来的四个区块，方便管理邮件、政策审批和其他工作。</p></div><div class="board">
         <section class="quadrant quadrant-today" aria-labelledby="heading-today">
           <div class="quadrant-head">
             <div class="quadrant-title"><span class="quadrant-icon" aria-hidden="true">01</span><div><p class="quadrant-kicker">马上行动</p><h2 id="heading-today">今日待办事项</h2></div></div>
@@ -106,7 +135,7 @@
           <p class="quadrant-hint">未到执行日的计划与待核实候选</p>
           <div id="list-future" class="task-list"></div>
         </section>
-      </section>
+      </div></section>
 
       <p class="privacy-note">台账导入只在本机浏览器处理。候选名单需先核实，才会进入“待触达”；拒绝联系的 KOL 不会进入队列。</p>
     </main>
@@ -136,7 +165,22 @@
         <label class="field full">对方需要 / 待确认 <textarea id="task-need" name="need" rows="2" maxlength="300" placeholder="例如：等我确认合作方式；没有记录就留空"></textarea></label>
         <label class="field full">判断依据 <input id="task-evidence" name="evidence" type="text" maxlength="300" placeholder="例如：邮件回复日期或台账状态；不要填写私人联系方式"></label>
       </div>
-      <div class="dialog-actions"><button id="cancel-button" class="button button-plain" type="button">取消</button><button class="button button-primary" type="submit">保存事项</button></div>
+      <div class="dialog-actions"><button id="cancel-button" class="button button-plain" type="button">取消</button><button id="task-save-button" class="button button-primary" type="submit">保存事项</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="date-dialog" aria-labelledby="date-dialog-title">
+    <form id="date-form">
+      <div class="dialog-head"><div><p class="eyebrow">KRM FOLLOW-UP CLOCK</p><h2 id="date-dialog-title">补录倒计时日期</h2><p id="date-dialog-person" class="dialog-subtitle"></p></div><button id="close-date-dialog" class="icon-button" type="button" aria-label="关闭">×</button></div>
+      <input id="date-task-id" type="hidden">
+      <div class="date-form-fields">
+        <label class="field">KRM 阶段 <select id="date-krm-stage" required><option value="" disabled>请按 KRM 选择阶段</option><option value="unconnected">未建联 · 14 天后可能退回公海</option><option value="negotiating">谈判中 · 14 天后可能退回公海</option><option value="signed">已签约 · 28 天后可能进入待分配池</option></select></label>
+        <label class="field">这是什么日期？ <select id="date-basis" required><option value="claimedDate">认领日期</option><option value="lastActivityDate">KRM 中最后一次跟进记录日期</option><option value="stageDate">进入谈判／签约日期</option></select></label>
+        <label class="field">日期 <input id="date-value" type="date" required></label>
+        <p class="field-help">请按 KRM 中有证据的日期填写。未触达线索的“上一次沟通时间”不能直接当作跟进日期。</p>
+        <p id="date-preview" class="date-preview" aria-live="polite">选择日期后，这里会预览剩余天数。</p>
+      </div>
+      <div class="dialog-actions"><button id="cancel-date-button" class="button button-plain" type="button">取消</button><button class="button button-primary" type="submit">保存并查看倒计时</button></div>
     </form>
   </dialog>
 </body>
