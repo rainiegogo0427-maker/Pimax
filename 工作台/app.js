@@ -1,0 +1,381 @@
+(function () {
+  "use strict";
+
+  const STORAGE_KEY = "pimax-kol-workbench-v1";
+  const CATEGORIES = ["today", "progress", "focus", "future"];
+  const PRIORITIES = { high: 0, medium: 1, low: 2 };
+  const SOURCE_LABELS = { manual: "手动", main: "KOL 主表", followup: "跟进记录", candidate: "候选名单" };
+  const $ = (id) => document.getElementById(id);
+  let today = localDate(new Date());
+  let state = loadState();
+
+  function localDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function clean(value, max = 400) {
+    return String(value == null ? "" : value).trim().slice(0, max);
+  }
+
+  function validDate(value) {
+    const date = clean(value, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
+  }
+
+  function normalizeTask(value) {
+    if (!value || typeof value !== "object") return null;
+    const title = clean(value.title, 120);
+    if (!title) return null;
+    return {
+      id: clean(value.id, 180) || `manual:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      title,
+      category: CATEGORIES.includes(value.category) ? value.category : "future",
+      type: value.source === "candidate" && value.type === "KOL 触达" ? "KOL 核实" : clean(value.type, 40) || "其他",
+      priority: Object.hasOwn(PRIORITIES, value.priority) ? value.priority : "medium",
+      due: validDate(value.due),
+      person: clean(value.person, 100),
+      next: clean(value.next, 400),
+      source: Object.hasOwn(SOURCE_LABELS, value.source) ? value.source : "manual",
+      done: value.done === true,
+      edited: value.edited === true
+    };
+  }
+
+  function loadState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      return { tasks: Array.isArray(saved.tasks) ? saved.tasks.slice(0, 5000).map(normalizeTask).filter(Boolean) : [], imports: saved.imports && typeof saved.imports === "object" ? saved.imports : {} };
+    } catch (_) {
+      return { tasks: [], imports: {} };
+    }
+  }
+
+  function persist(message) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (message) setStatus(message);
+    } catch (_) {
+      setStatus("浏览器无法保存事项，请立即导出备份。", true);
+    }
+  }
+
+  function setStatus(message, isError = false) {
+    const element = $("data-status");
+    element.textContent = message;
+    element.classList.toggle("overdue", isError);
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function dateLabel(date) {
+    if (!date) return "";
+    if (date === today) return "今天到期";
+    if (date < today) return `已超期 · ${date}`;
+    return `计划 ${date}`;
+  }
+
+  function createTaskCard(task) {
+    const card = el("article", `task${task.done ? " is-complete" : ""}`);
+    const checkbox = el("input", "task-check");
+    checkbox.type = "checkbox";
+    checkbox.checked = task.done;
+    checkbox.setAttribute("aria-label", `${task.done ? "取消完成" : "完成"}：${task.title}`);
+    checkbox.addEventListener("change", () => {
+      task.done = checkbox.checked;
+      persist(task.done ? "事项已完成。" : "事项已恢复。 ");
+      render();
+    });
+    card.append(checkbox);
+
+    const main = el("div", "task-main");
+    const line = el("div", "task-line");
+    line.append(el("span", "task-title", task.title));
+    line.append(el("span", `task-priority ${task.priority}`, { high: "高优先级", medium: "中优先级", low: "低优先级" }[task.priority]));
+    main.append(line);
+    const meta = el("div", "task-meta");
+    meta.append(el("span", "", task.type));
+    if (task.person) meta.append(el("span", "", task.person));
+    if (task.due) meta.append(el("span", task.due < today && !task.done ? "overdue" : "", dateLabel(task.due)));
+    meta.append(el("span", "", SOURCE_LABELS[task.source]));
+    main.append(meta);
+    if (task.next) main.append(el("p", "task-next", task.next));
+    const actions = el("div", "task-actions");
+    const edit = el("button", "text-button", "编辑");
+    edit.type = "button";
+    edit.addEventListener("click", () => openDialog(task));
+    actions.append(edit);
+    if (task.source === "manual") {
+      const remove = el("button", "text-button", "删除");
+      remove.type = "button";
+      remove.addEventListener("click", () => {
+        if (!window.confirm(`确定删除“${task.title}”吗？删除后只能从备份恢复。`)) return;
+        state.tasks = state.tasks.filter((item) => item.id !== task.id);
+        persist("事项已删除。");
+        render();
+      });
+      actions.append(remove);
+    }
+    main.append(actions);
+    card.append(main);
+    return card;
+  }
+
+  function sortTasks(a, b) {
+    return Number(a.done) - Number(b.done) || PRIORITIES[a.priority] - PRIORITIES[b.priority] || (a.due || "9999").localeCompare(b.due || "9999") || a.title.localeCompare(b.title, "zh-CN");
+  }
+
+  function render() {
+    const showCompleted = $("show-completed").checked;
+    const activeFollowups = new Set(state.tasks.filter((task) => task.source === "followup" && !task.done).map((task) => task.person.toLowerCase()));
+    for (const category of CATEGORIES) {
+      const list = $(`list-${category}`);
+      list.replaceChildren();
+      const tasks = state.tasks.filter((task) => displayCategory(task) === category && (showCompleted || !task.done) && !(task.source === "main" && activeFollowups.has(task.person.toLowerCase()))).sort(sortTasks);
+      $(`count-${category}`).textContent = String(tasks.filter((task) => !task.done).length);
+      if (tasks.length === 0) {
+        list.append(el("div", "empty", category === "today" ? "今天还没有记录的待办。添加事项，或导入台账查看到期跟进。" : "这里暂时没有事项。"));
+      } else {
+        for (const task of tasks) list.append(createTaskCard(task));
+      }
+    }
+  }
+
+  function displayCategory(task) {
+    return task.due && task.due <= today && task.category !== "focus" ? "today" : task.category;
+  }
+
+  function openDialog(task) {
+    $("task-form").reset();
+    $("task-id").value = task ? task.id : "";
+    $("dialog-title").textContent = task ? "编辑事项" : "添加事项";
+    if (task) {
+      $("task-title").value = task.title;
+      $("task-category").value = task.category;
+      $("task-type").value = [...$("task-type").options].some((option) => option.value === task.type) ? task.type : "其他";
+      $("task-priority").value = task.priority;
+      $("task-due").value = task.due;
+      $("task-person").value = task.person;
+      $("task-next").value = task.next;
+    }
+    $("task-dialog").showModal();
+    $("task-title").focus();
+  }
+
+  function saveForm(event) {
+    event.preventDefault();
+    const id = $("task-id").value;
+    const existing = state.tasks.find((task) => task.id === id);
+    const task = normalizeTask({
+      id: existing ? existing.id : `manual:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      title: $("task-title").value,
+      category: $("task-category").value,
+      type: $("task-type").value,
+      priority: $("task-priority").value,
+      due: $("task-due").value,
+      person: $("task-person").value,
+      next: $("task-next").value,
+      source: existing ? existing.source : "manual",
+      done: existing ? existing.done : false,
+      edited: Boolean(existing)
+    });
+    if (!task) return;
+    if (existing) Object.assign(existing, task);
+    else state.tasks.push(task);
+    persist(existing ? "事项已更新。" : "事项已添加。 ");
+    $("task-dialog").close();
+    render();
+  }
+
+  function parseCSV(text) {
+    const input = text.replace(/^\uFEFF/, "");
+    const rows = [];
+    let row = [], field = "", quoted = false;
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i];
+      if (quoted) {
+        if (char === '"' && input[i + 1] === '"') { field += '"'; i++; }
+        else if (char === '"') quoted = false;
+        else field += char;
+      } else if (char === '"' && field === "") quoted = true;
+      else if (char === ",") { row.push(field); field = ""; }
+      else if (char === "\n" || char === "\r") {
+        if (char === "\r" && input[i + 1] === "\n") i++;
+        row.push(field); field = "";
+        if (row.some((cell) => cell.trim())) rows.push(row);
+        row = [];
+      } else field += char;
+    }
+    if (quoted) throw new Error("CSV 引号不完整");
+    row.push(field);
+    if (row.some((cell) => cell.trim())) rows.push(row);
+    if (!rows.length) return [];
+    const headers = rows.shift().map((cell) => cell.trim());
+    return rows.map((cells) => Object.fromEntries(headers.map((header, index) => [header, clean(cells[index], 1000)])));
+  }
+
+  function detectSource(rows) {
+    if (!rows.length) return null;
+    const keys = rows[0];
+    if (Object.hasOwn(keys, "KOL账号") && Object.hasOwn(keys, "当前状态")) return "followup";
+    if (Object.hasOwn(keys, "账号名") && Object.hasOwn(keys, "公海查重结果")) return "candidate";
+    if (Object.hasOwn(keys, "账号名") && Object.hasOwn(keys, "状态")) return "main";
+    return null;
+  }
+
+  function sampleRow(row) {
+    return Object.values(row).some((value) => clean(value, 1000).includes("这行是示例请删除")) || clean(row["账号名"] || row["KOL账号"]).includes("示例账号");
+  }
+
+  function importedTask(id, title, category, type, priority, due, person, next, source) {
+    return normalizeTask({ id, title, category, type, priority, due, person, next, source });
+  }
+
+  function tasksFromRows(rows, source) {
+    const output = [];
+    const seen = new Set();
+    for (const row of rows) {
+      if (sampleRow(row)) continue;
+      const account = clean(row["KOL账号"] || row["账号名"], 100);
+      if (!account || seen.has(account.toLowerCase())) continue;
+      seen.add(account.toLowerCase());
+      let task = null;
+      if (source === "main") {
+        if (row["状态"] !== "待外联") continue;
+        const rating = clean(row["初筛评级"]);
+        task = importedTask(`main:${account.toLowerCase()}`, `触达 ${account}`, rating === "C" ? "future" : "today", "KOL 触达", rating === "A" ? "high" : "medium", "", account, "先核近期内容，再按对方内容语言准备首触；发送后更新跟进记录。", source);
+      } else if (source === "followup") {
+        const status = clean(row["当前状态"]);
+        if (["已拒绝-勿再联系", "已放弃", "内容已发"].includes(status)) continue;
+        if (!["已首触", "跟进中", "洽谈中", "已成交", "已发货", "已暂缓"].includes(status)) continue;
+        const due = validDate(row["下次跟进日期"]);
+        if (status === "已暂缓" && !due) continue;
+        const category = due && due <= today ? "today" : status === "已暂缓" ? "future" : "progress";
+        const title = status === "已发货" ? `确认 ${account} 样机签收与内容进度` : `跟进 ${account}`;
+        const next = clean(row["卡点/等待什么"]) || (status === "已发货" ? "确认是否签收样机，并约定内容进度。" : "查看上次沟通内容，按约定时间跟进。");
+        task = importedTask(`followup:${account.toLowerCase()}`, title, category, status === "已发货" ? "样机与内容" : "KOL 跟进", due && due <= today ? "high" : "medium", due, account, next, source);
+      } else if (source === "candidate") {
+        if (row["公海查重结果"] !== "未发现重复" || row["状态"] !== "待核实") continue;
+        task = importedTask(`candidate:${account.toLowerCase()}`, `核实候选 ${account}`, "future", "KOL 核实", "low", "", account, "先核实主页、近期内容、国家和语言；通过后才进入正式主表和触达队列。", source);
+      }
+      if (task) output.push(task);
+    }
+    return output;
+  }
+
+  async function importCSVs(files) {
+    const parsed = [];
+    const skipped = [];
+    for (const file of files) {
+      try {
+        const rows = parseCSV(await file.text());
+        const source = detectSource(rows);
+        if (!source) { skipped.push(file.name); continue; }
+        parsed.push({ source, tasks: tasksFromRows(rows, source) });
+      } catch (_) { skipped.push(file.name); }
+    }
+    if (!parsed.length) { setStatus("未识别到可用的 KOL 主表、跟进记录或候选名单 CSV。", true); return; }
+    const previous = new Map(state.tasks.map((task) => [task.id, task]));
+    for (const group of parsed) {
+      state.tasks = state.tasks.filter((task) => task.source !== group.source);
+      for (const fresh of group.tasks) {
+        const old = previous.get(fresh.id);
+        if (old) {
+          fresh.done = old.done;
+          if (old.edited) Object.assign(fresh, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, edited: true });
+        }
+        state.tasks.push(fresh);
+      }
+      state.imports[group.source] = { date: today, count: group.tasks.length };
+    }
+    const total = parsed.reduce((sum, group) => sum + group.tasks.length, 0);
+    persist(`已导入 ${parsed.length} 份台账，生成 ${total} 个事项；跳过示例、已拒绝或暂不可触达的记录。${skipped.length ? ` 未识别：${skipped.join("、")}` : ""}`);
+    render();
+  }
+
+  function exportBackup() {
+    const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), tasks: state.tasks, imports: state.imports }, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = el("a");
+    link.href = url;
+    link.download = `工作台备份-${today}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus("备份已下载。请妥善保存，文件中可能包含你填写的工作备注。");
+  }
+
+  async function restoreBackup(file) {
+    try {
+      const data = JSON.parse(await file.text());
+      if (data.version !== 1 || !Array.isArray(data.tasks)) throw new Error("格式不符");
+      const tasks = data.tasks.slice(0, 5000).map(normalizeTask).filter(Boolean);
+      if (tasks.length !== data.tasks.length) throw new Error("事项不完整");
+      if (state.tasks.length && !window.confirm(`恢复备份会替换当前的 ${state.tasks.length} 个事项，确定继续吗？`)) return;
+      state = { tasks, imports: data.imports && typeof data.imports === "object" ? data.imports : {} };
+      persist(`已恢复 ${tasks.length} 个事项。`);
+      render();
+    } catch (_) { setStatus("备份文件无法恢复，请确认它由此工作台导出。", true); }
+  }
+
+  $("today-label").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(new Date());
+  $("add-button").addEventListener("click", () => openDialog(null));
+  $("close-dialog").addEventListener("click", () => $("task-dialog").close());
+  $("cancel-button").addEventListener("click", () => $("task-dialog").close());
+  $("task-form").addEventListener("submit", saveForm);
+  $("show-completed").addEventListener("change", render);
+  $("csv-button").addEventListener("click", () => $("csv-input").click());
+  $("csv-input").addEventListener("change", async (event) => { await importCSVs([...event.target.files]); event.target.value = ""; });
+  $("export-button").addEventListener("click", exportBackup);
+  $("restore-button").addEventListener("click", () => $("backup-input").click());
+  $("backup-input").addEventListener("change", async (event) => { if (event.target.files[0]) await restoreBackup(event.target.files[0]); event.target.value = ""; });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      today = localDate(new Date());
+      $("today-label").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(new Date());
+      render();
+    }
+  });
+  if (document.modelContext?.registerTool) {
+    try {
+      Promise.resolve(document.modelContext.registerTool({
+        name: "create_work_item",
+        title: "添加工作事项",
+        description: "在当前浏览器的个人工作台新增一个事项，并立即显示在所选区块。",
+        inputSchema: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            category: { type: "string", enum: CATEGORIES },
+            type: { type: "string" },
+            priority: { type: "string", enum: ["high", "medium", "low"] },
+            due: { type: "string", description: "可选，YYYY-MM-DD" },
+            person: { type: "string" },
+            next: { type: "string" }
+          },
+          required: ["title", "category"],
+          additionalProperties: false
+        },
+        annotations: { readOnlyHint: false, untrustedContentHint: false },
+        execute(input) {
+          if (!input || typeof input !== "object" || typeof input.title !== "string" || !CATEGORIES.includes(input.category) || (input.due && !validDate(input.due))) throw new Error("事项内容或日期无效");
+          const task = normalizeTask({ ...input, id: `manual:${Date.now()}:${Math.random().toString(36).slice(2)}`, source: "manual" });
+          if (!task) throw new Error("事项名称不能为空");
+          state.tasks.push(task);
+          persist("事项已添加。");
+          render();
+          return { id: task.id, title: task.title, category: displayCategory(task) };
+        }
+      })).catch(() => {});
+    } catch (_) { /* Browser does not support WebMCP. */ }
+  }
+  render();
+})();
