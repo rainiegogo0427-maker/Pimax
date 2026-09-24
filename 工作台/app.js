@@ -4,7 +4,8 @@
   const STORAGE_KEY = "pimax-kol-workbench-v1";
   const CATEGORIES = ["today", "progress", "focus", "future"];
   const PRIORITIES = { high: 0, medium: 1, low: 2 };
-  const SOURCE_LABELS = { manual: "手动", main: "KOL 主表", followup: "跟进记录", candidate: "候选名单" };
+  const SOURCE_LABELS = { manual: "手动", main: "KOL 主表", followup: "跟进记录", candidate: "候选名单", workbook: "跟进表单" };
+  const FLOW_LABELS = { uncontacted: "尚未触达", no_reply: "已触达未回复", reply_pending: "已回复待核对跟进", collaboration: "合作推进", collaboration_review: "合作状态待核实", script: "样机与脚本", verify: "候选待核实" };
   const $ = (id) => document.getElementById(id);
   let today = localDate(new Date());
   let state = loadState();
@@ -39,6 +40,10 @@
       person: clean(value.person, 100),
       next: clean(value.next, 400),
       source: Object.hasOwn(SOURCE_LABELS, value.source) ? value.source : "manual",
+      flow: Object.hasOwn(FLOW_LABELS, value.flow) ? value.flow : "",
+      evidence: clean(value.evidence, 300),
+      need: clean(value.need, 300),
+      suggested: value.suggested === true,
       done: value.done === true,
       edited: value.edited === true
     };
@@ -106,7 +111,9 @@
     if (task.due) meta.append(el("span", task.due < today && !task.done ? "overdue" : "", dateLabel(task.due)));
     meta.append(el("span", "", SOURCE_LABELS[task.source]));
     main.append(meta);
+    if (task.need) main.append(el("p", "task-next", `对方需要 / 待确认：${task.need}`));
     if (task.next) main.append(el("p", "task-next", task.next));
+    if (task.evidence) main.append(el("p", "task-evidence", `依据：${task.evidence}`));
     const actions = el("div", "task-actions");
     const edit = el("button", "text-button", "编辑");
     edit.type = "button";
@@ -132,19 +139,73 @@
     return Number(a.done) - Number(b.done) || PRIORITIES[a.priority] - PRIORITIES[b.priority] || (a.due || "9999").localeCompare(b.due || "9999") || a.title.localeCompare(b.title, "zh-CN");
   }
 
+  function accountKey(person) {
+    return clean(person).toLocaleLowerCase().replace(/[\s_@-]/g, "");
+  }
+
   function render() {
     const showCompleted = $("show-completed").checked;
-    const activeFollowups = new Set(state.tasks.filter((task) => task.source === "followup" && !task.done).map((task) => task.person.toLowerCase()));
+    const activeFollowups = new Set(state.tasks.filter((task) => ["followup", "workbook"].includes(task.source) && !task.done).map((task) => accountKey(task.person)));
     for (const category of CATEGORIES) {
       const list = $(`list-${category}`);
       list.replaceChildren();
-      const tasks = state.tasks.filter((task) => displayCategory(task) === category && (showCompleted || !task.done) && !(task.source === "main" && activeFollowups.has(task.person.toLowerCase()))).sort(sortTasks);
+      const tasks = state.tasks.filter((task) => displayCategory(task) === category && (showCompleted || !task.done) && !(task.source === "main" && activeFollowups.has(accountKey(task.person)))).sort(sortTasks);
       $(`count-${category}`).textContent = String(tasks.filter((task) => !task.done).length);
       if (tasks.length === 0) {
         list.append(el("div", "empty", category === "today" ? "今天还没有记录的待办。添加事项，或导入台账查看到期跟进。" : "这里暂时没有事项。"));
       } else {
         for (const task of tasks) list.append(createTaskCard(task));
       }
+    }
+    renderDailyLists();
+  }
+
+  function compactCard(task) {
+    const card = el("article", "daily-item");
+    const head = el("div", "daily-item-head");
+    head.append(el("strong", "", task.person || task.title));
+    head.append(el("span", "daily-item-source", SOURCE_LABELS[task.source]));
+    card.append(head);
+    if (task.evidence) card.append(el("p", "daily-item-evidence", task.evidence));
+    if (task.need) card.append(el("p", "daily-item-need", `对方需要 / 待确认：${task.need}`));
+    card.append(el("p", "daily-item-next", task.next || task.title));
+    const edit = el("button", "text-button", "编辑下一步");
+    edit.type = "button";
+    edit.addEventListener("click", () => openDialog(task));
+    card.append(edit);
+    return card;
+  }
+
+  function renderDailyLists() {
+    const active = state.tasks.filter((task) => !task.done);
+    const contacted = new Set(active.filter((task) => ["workbook", "followup"].includes(task.source)).map((task) => accountKey(task.person)));
+    const groups = {
+      uncontacted: active.filter((task) => task.flow === "uncontacted" && !contacted.has(accountKey(task.person))),
+      no_reply: active.filter((task) => task.flow === "no_reply"),
+      reply_pending: active.filter((task) => task.flow === "reply_pending"),
+      collaboration: active.filter((task) => ["collaboration", "collaboration_review", "reply_pending"].includes(task.flow)),
+      script: active.filter((task) => task.flow === "script"),
+      today: active.filter((task) => displayCategory(task) === "today" || task.suggested)
+    };
+    const candidates = active.filter((task) => task.flow === "verify").length;
+    const empty = {
+      uncontacted: `台账未记录已核实、尚未触达的 KOL。${candidates ? `${candidates} 名候选仍待核实。` : ""}`,
+      no_reply: "台账未记录已触达且未回复的 KOL。",
+      reply_pending: "台账未记录已回复、但缺少后续跟进记录的 KOL。",
+      collaboration: "台账未记录明确的谈判或合作需求。",
+      script: "台账未记录欧洲 KOL 已持有样机且需要修改脚本。",
+      today: "没有记录今天到期的事项；需要先补充下次跟进日期。"
+    };
+    for (const [key, tasks] of Object.entries(groups)) {
+      const list = $(`daily-${key}`);
+      list.replaceChildren();
+      $(`daily-count-${key}`).textContent = String(tasks.length);
+      if (!tasks.length) list.append(el("p", "daily-empty", empty[key]));
+      else for (const task of tasks.sort(sortTasks)) list.append(compactCard(task));
+    }
+    const diagnostics = window.PIMAX_LOCAL_SEED?.diagnostics;
+    if (diagnostics && state.imports.privateSeedRevision) {
+      $("source-summary").textContent = `已整理 ${diagnostics.workbook_rows} 条触达记录；${diagnostics.outside_europe_or_unknown} 条地区不在欧洲或未知、${diagnostics.do_not_contact} 条明确拒绝均未进入待办。${diagnostics.candidate_duplicates} 条候选与已触达记录重合，已排除重复。原表无统一下次跟进日期。`;
     }
   }
 
@@ -164,6 +225,9 @@
       $("task-due").value = task.due;
       $("task-person").value = task.person;
       $("task-next").value = task.next;
+      $("task-flow").value = task.flow;
+      $("task-need").value = task.need;
+      $("task-evidence").value = task.evidence;
     }
     $("task-dialog").showModal();
     $("task-title").focus();
@@ -182,6 +246,10 @@
       due: $("task-due").value,
       person: $("task-person").value,
       next: $("task-next").value,
+      flow: $("task-flow").value,
+      need: $("task-need").value,
+      evidence: $("task-evidence").value,
+      suggested: existing ? existing.suggested : false,
       source: existing ? existing.source : "manual",
       done: existing ? existing.done : false,
       edited: Boolean(existing)
@@ -251,6 +319,7 @@
         if (row["状态"] !== "待外联") continue;
         const rating = clean(row["初筛评级"]);
         task = importedTask(`main:${account.toLowerCase()}`, `触达 ${account}`, rating === "C" ? "future" : "today", "KOL 触达", rating === "A" ? "high" : "medium", "", account, "先核近期内容，再按对方内容语言准备首触；发送后更新跟进记录。", source);
+        task.flow = "uncontacted";
       } else if (source === "followup") {
         const status = clean(row["当前状态"]);
         if (["已拒绝-勿再联系", "已放弃", "内容已发"].includes(status)) continue;
@@ -264,6 +333,7 @@
       } else if (source === "candidate") {
         if (row["公海查重结果"] !== "未发现重复" || row["状态"] !== "待核实") continue;
         task = importedTask(`candidate:${account.toLowerCase()}`, `核实候选 ${account}`, "future", "KOL 核实", "low", "", account, "先核实主页、近期内容、国家和语言；通过后才进入正式主表和触达队列。", source);
+        task.flow = "verify";
       }
       if (task) output.push(task);
     }
@@ -289,7 +359,7 @@
         const old = previous.get(fresh.id);
         if (old) {
           fresh.done = old.done;
-          if (old.edited) Object.assign(fresh, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, edited: true });
+          if (old.edited) Object.assign(fresh, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, flow: old.flow, evidence: old.evidence, need: old.need, suggested: old.suggested, edited: true });
         }
         state.tasks.push(fresh);
       }
@@ -324,6 +394,24 @@
       persist(`已恢复 ${tasks.length} 个事项。`);
       render();
     } catch (_) { setStatus("备份文件无法恢复，请确认它由此工作台导出。", true); }
+  }
+
+  function applyLocalSeed() {
+    const seed = window.PIMAX_LOCAL_SEED;
+    if (!seed || seed.version !== 1 || !Array.isArray(seed.tasks) || !seed.revision || state.imports.privateSeedRevision === seed.revision) return;
+    const previous = new Map(state.tasks.map((task) => [task.id, task]));
+    const fresh = seed.tasks.map(normalizeTask).filter(Boolean);
+    state.tasks = state.tasks.filter((task) => task.source !== "workbook" && task.source !== "candidate");
+    for (const task of fresh) {
+      const old = previous.get(task.id);
+      if (old) {
+        task.done = old.done;
+        if (old.edited) Object.assign(task, { title: old.title, category: old.category, type: old.type, priority: old.priority, due: old.due, person: old.person, next: old.next, flow: old.flow, evidence: old.evidence, need: old.need, suggested: old.suggested, edited: true });
+      }
+      state.tasks.push(task);
+    }
+    state.imports.privateSeedRevision = seed.revision;
+    persist(`已载入本机脱敏跟进摘要，生成 ${fresh.length} 个事项；原表未修改。`);
   }
 
   $("today-label").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(new Date());
@@ -377,5 +465,6 @@
       })).catch(() => {});
     } catch (_) { /* Browser does not support WebMCP. */ }
   }
+  applyLocalSeed();
   render();
 })();

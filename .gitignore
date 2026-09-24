@@ -1,0 +1,5 @@
+# 公开仓库不保存个人或 KOL 业务数据
+工作台/local-data.js
+*.xlsx
+*备份*.json
+private-*.json

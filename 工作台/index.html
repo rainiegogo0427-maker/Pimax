@@ -8,6 +8,7 @@
   <title>我的工作台 · Pimax 欧洲 KOL</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%231a3c77'/%3E%3Cpath d='M14 19h36v8H14zm0 18h23v8H14z' fill='white'/%3E%3Ccircle cx='47' cy='41' r='7' fill='%23f3bd52'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
+  <script src="local-data.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -43,6 +44,21 @@
         <p id="data-status" role="status" aria-live="polite">事项仅保存在当前浏览器。导出备份可防止换设备或清理浏览器后丢失。</p>
         <label class="completed-toggle"><input id="show-completed" type="checkbox"> 显示已完成</label>
       </div>
+
+      <section class="daily" aria-labelledby="daily-heading">
+        <div class="daily-heading">
+          <div><p class="eyebrow">DAILY KOL DESK</p><h2 id="daily-heading">每日 KOL 清单</h2></div>
+          <p id="source-summary">导入台账后，这里会按实际记录显示 KOL 的下一步。</p>
+        </div>
+        <div class="daily-grid">
+          <section class="daily-panel daily-panel-today" aria-labelledby="daily-title-today"><div class="daily-panel-head"><h3 id="daily-title-today">今天建议先处理谁</h3><span id="daily-count-today">0</span></div><p class="daily-panel-hint">含今天到期事项和根据未记录后续跟进给出的建议；建议不等于约定截止日。</p><div id="daily-today" class="daily-list"></div></section>
+          <section class="daily-panel" aria-labelledby="daily-title-reply_pending"><div class="daily-panel-head"><h3 id="daily-title-reply_pending">已回复但未记录后续跟进</h3><span id="daily-count-reply_pending">0</span></div><p class="daily-panel-hint">先核对邮件线程，再确认是否需要回复。</p><div id="daily-reply_pending" class="daily-list"></div></section>
+          <section class="daily-panel" aria-labelledby="daily-title-uncontacted"><div class="daily-panel-head"><h3 id="daily-title-uncontacted">尚未触达</h3><span id="daily-count-uncontacted">0</span></div><p class="daily-panel-hint">只显示已核实且确定未发送首触的 KOL。</p><div id="daily-uncontacted" class="daily-list"></div></section>
+          <section class="daily-panel" aria-labelledby="daily-title-no_reply"><div class="daily-panel-head"><h3 id="daily-title-no_reply">已触达、未回复</h3><span id="daily-count-no_reply">0</span></div><p class="daily-panel-hint">没有发送日期时，先补日期，不自动判定超期。</p><div id="daily-no_reply" class="daily-list"></div></section>
+          <section class="daily-panel" aria-labelledby="daily-title-collaboration"><div class="daily-panel-head"><h3 id="daily-title-collaboration">合作推进与对方需求</h3><span id="daily-count-collaboration">0</span></div><p class="daily-panel-hint">显示台账中的推进状态；谈判和签约以明确记录为准。</p><div id="daily-collaboration" class="daily-list"></div></section>
+          <section class="daily-panel" aria-labelledby="daily-title-script"><div class="daily-panel-head"><h3 id="daily-title-script">样机在手、脚本待修改</h3><span id="daily-count-script">0</span></div><p class="daily-panel-hint">需要同时有样机签收和脚本修改任务的记录。</p><div id="daily-script" class="daily-list"></div></section>
+        </div>
+      </section>
 
       <section class="board" aria-label="工作事项四个区块">
         <section class="quadrant quadrant-today" aria-labelledby="heading-today">
@@ -97,10 +113,13 @@
         <label class="field full">事项名称 <input id="task-title" name="title" type="text" maxlength="120" required placeholder="例如：回复 KOL 的合作邮件"></label>
         <label class="field">放在哪个区块 <select id="task-category" name="category" required><option value="today">今日待办事项</option><option value="progress">跟进中</option><option value="focus">重点事项</option><option value="future">未来工作事项</option></select></label>
         <label class="field">事项类型 <select id="task-type" name="type"><option value="邮件待回复">邮件待回复</option><option value="政策待审批">政策待审批</option><option value="样机与内容">样机与内容</option><option value="KOL 核实">KOL 核实</option><option value="KOL 触达">KOL 触达</option><option value="KOL 跟进">KOL 跟进</option><option value="其他">其他</option></select></label>
+        <label class="field">KOL 清单归类 <select id="task-flow" name="flow"><option value="">仅显示在工作事项</option><option value="uncontacted">尚未触达</option><option value="no_reply">已触达未回复</option><option value="reply_pending">已回复待跟进</option><option value="collaboration">合作推进</option><option value="collaboration_review">合作状态待核实</option><option value="script">样机在手、脚本待修改</option><option value="verify">候选待核实</option></select></label>
         <label class="field">优先级 <select id="task-priority" name="priority"><option value="high">高</option><option value="medium" selected>中</option><option value="low">低</option></select></label>
         <label class="field">截止 / 下次跟进日期 <input id="task-due" name="due" type="date"></label>
         <label class="field full">相关 KOL / 对象 <input id="task-person" name="person" type="text" maxlength="100" placeholder="可留空"></label>
         <label class="field full">下一步动作 <textarea id="task-next" name="next" rows="2" maxlength="400" placeholder="写清楚下一步具体要做什么"></textarea></label>
+        <label class="field full">对方需要 / 待确认 <textarea id="task-need" name="need" rows="2" maxlength="300" placeholder="例如：等我确认合作方式；没有记录就留空"></textarea></label>
+        <label class="field full">判断依据 <input id="task-evidence" name="evidence" type="text" maxlength="300" placeholder="例如：邮件回复日期或台账状态；不要填写私人联系方式"></label>
       </div>
       <div class="dialog-actions"><button id="cancel-button" class="button button-plain" type="button">取消</button><button class="button button-primary" type="submit">保存事项</button></div>
     </form>

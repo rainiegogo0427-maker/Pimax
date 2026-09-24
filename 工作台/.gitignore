@@ -1,0 +1,5 @@
+# 本机业务数据绝不进入公开仓库
+local-data.js
+*.xlsx
+*备份*.json
+private-*.json
